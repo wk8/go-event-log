@@ -10,8 +10,6 @@ import (
 	"github.com/go-redis/redis/v8"
 )
 
-// TODO wkpo next: on veut donner les IDs quand on returne, pour pouvoir resume le follow ou il a plante
-
 type EventLog struct {
 	client  redis.UniversalClient
 	name    string
@@ -35,6 +33,11 @@ type Entry map[string]interface{}
 // variants.
 type EntryID struct {
 	id string
+}
+
+type EntryWithID struct {
+	Entry Entry
+	ID    EntryID
 }
 
 // UnknownEntryIDError is the error returned by `TailFrom` and its variants when passed an entry ID
@@ -126,23 +129,23 @@ func (l *EventLog) add(ctx context.Context, client redis.Cmdable, entry Entry) *
 
 // Tail retrieves the last messages committed to the event log - either the whole log, if the MaxLength option
 // hasn't been set, or just the last MaxLength messages.
-func (l *EventLog) Tail(ctx context.Context) ([]Entry, error) {
+func (l *EventLog) Tail(ctx context.Context) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, nil, nil)
 }
 
 // TailN retrieves the last n messages; n cannot be greater than MaxLength, if it's been set in the options.
 // n can be 0, though it doesn't seem too interesting to do that.
-func (l *EventLog) TailN(ctx context.Context, n uint) ([]Entry, error) {
+func (l *EventLog) TailN(ctx context.Context, n uint) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, &n, nil)
 }
 
 // TailFrom retrieves the messages including and since the given entry ID. It returns UnknownEntryIDError if the entry
 // ID doesn't exist (or no longer exists).
-func (l *EventLog) TailFrom(ctx context.Context, from EntryID) ([]Entry, error) {
+func (l *EventLog) TailFrom(ctx context.Context, from EntryID) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, nil, &from)
 }
 
-func (l *EventLog) tailEntries(ctx context.Context, n *uint, from *EntryID) ([]Entry, error) {
+func (l *EventLog) tailEntries(ctx context.Context, n *uint, from *EntryID) ([]EntryWithID, error) {
 	messages, err := l.tailMessages(ctx, n, from)
 	return messagesToEntries(messages), err
 }
@@ -186,7 +189,7 @@ func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *EntryID) (me
 // It will only return when it encounters an error talking to Redis, or when the context expires or gets canceled
 // (in which case it returns the relevant error from the context package).
 // Never returns nil.
-func (l *EventLog) TailAndFollow(ctx context.Context, ch chan<- []Entry) error {
+func (l *EventLog) TailAndFollow(ctx context.Context, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, nil, nil, ch)
 }
 
@@ -194,20 +197,22 @@ func (l *EventLog) TailAndFollow(ctx context.Context, ch chan<- []Entry) error {
 // before starting to listen for new ones.
 // n can be 0 here too, as for TailN, and here it can make sense: that can be used
 // to subscribe to future entries regardless of past ones.
-func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []Entry) error {
+func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, &n, nil, ch)
 }
 
 // TailFromAndFollow is the same as TailAndFollow, except it will limit itself to the given entry ID and the following
 // entries.
 // Just like TailFrom, it returns UnknownEntryIDError if the entry ID doesn't exist (or no longer exists).
-func (l *EventLog) TailFromAndFollow(ctx context.Context, from EntryID, ch chan<- []Entry) error {
+func (l *EventLog) TailFromAndFollow(ctx context.Context, from EntryID, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, nil, &from, ch)
 }
 
 var xReadTimeout = time.Hour // nolint: gochecknoglobals
 
-func (l *EventLog) tailAndFollow(ctx context.Context, n *uint, from *EntryID, entryChan chan<- []Entry) (err error) {
+func (l *EventLog) tailAndFollow(
+	ctx context.Context, n *uint, from *EntryID, entryChan chan<- []EntryWithID,
+) (err error) {
 	var messages []redis.XMessage
 
 	nIsZero := n != nil && *n == 0
@@ -224,7 +229,7 @@ func (l *EventLog) tailAndFollow(ctx context.Context, n *uint, from *EntryID, en
 		return err
 	}
 	if nIsZero || len(messages) == 0 {
-		entryChan <- []Entry{}
+		entryChan <- []EntryWithID{}
 	} else {
 		entryChan <- messagesToEntries(messages)
 	}
@@ -255,10 +260,13 @@ func (l *EventLog) tailAndFollow(ctx context.Context, n *uint, from *EntryID, en
 	}
 }
 
-func messagesToEntries(messages []redis.XMessage) []Entry {
-	entries := make([]Entry, len(messages))
+func messagesToEntries(messages []redis.XMessage) []EntryWithID {
+	entries := make([]EntryWithID, len(messages))
 	for i, message := range messages {
-		entries[i] = message.Values
+		entries[i] = EntryWithID{
+			Entry: message.Values,
+			ID:    EntryID{message.ID},
+		}
 	}
 	return entries
 }

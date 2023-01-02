@@ -38,7 +38,7 @@ func TestThreadAndProcessSafe(t *testing.T) {
 	entries := randomEntries(producersCount * entriesPerProducer)
 
 	tailCtx, cancelTailCtx := context.WithCancel(baseCtx)
-	ch := make(chan []Entry)
+	ch := make(chan []EntryWithID)
 	consumersPerProducer := 3
 
 	var wg sync.WaitGroup
@@ -50,11 +50,11 @@ func TestThreadAndProcessSafe(t *testing.T) {
 	startTime := time.Now()
 
 	for i := 0; i < producersCount; i++ {
-		go func(producerId int) {
+		go func(producerID int) {
 			defer wg.Done()
 
 			for j := 0; j < entriesPerProducer; j++ {
-				ids, err := log.Add(baseCtx, entries[producerId+j*producersCount])
+				ids, err := log.Add(baseCtx, entries[producerID+j*producersCount])
 				require.NoError(t, err)
 				entryIDsCh <- ids
 			}
@@ -80,12 +80,12 @@ func TestThreadAndProcessSafe(t *testing.T) {
 		select {
 		case entrySlice := <-ch:
 			for _, entry := range entrySlice {
-				entryID, err := strconv.Atoi(entry[indexField].(string))
+				entryIndex, err := strconv.Atoi(entry.Entry[indexField].(string))
 				if assert.NoError(t, err) {
-					countsPerEntry[entryID]++
+					countsPerEntry[entryIndex]++
 
-					expectedEntry := entries[entryID]
-					assert.Equal(t, expectedEntry, entry)
+					expectedEntry := entries[entryIndex]
+					assert.Equal(t, expectedEntry, entry.Entry)
 				}
 			}
 
@@ -135,14 +135,17 @@ func TestWithMaxLength(t *testing.T) {
 	entries := randomEntries(entriesCount)
 
 	startTime := time.Now()
-	entryIDs, err := log.Add(baseCtx, entries...)
+	ids, err := log.Add(baseCtx, entries...)
 	require.NoError(t, err)
-	assertEntryIDsAreValid(t, startTime, entryIDs, true)
+	assertEntryIDsAreValid(t, startTime, ids, true)
 
-	e, err := log.Tail(baseCtx)
+	actual, err := log.Tail(baseCtx)
 	require.NoError(t, err)
-	assert.Equal(t, maxLength, len(e))
-	assert.Equal(t, entries[entriesCount-maxLength:], e)
+	assert.Equal(t, maxLength, len(actual))
+
+	expectedEntries := entries[entriesCount-maxLength:]
+	expectedIDs := ids[entriesCount-maxLength:]
+	assert.Equal(t, zipEntriesWithIDs(t, expectedEntries, expectedIDs), actual)
 
 	redisCount, err := client.XLen(baseCtx, key).Result()
 	if assert.NoError(t, err) {
@@ -165,7 +168,7 @@ func TestWithTTL(t *testing.T) {
 	entries := randomEntries(entriesCount)
 
 	tailCtx, cancelTailCtx := context.WithCancel(baseCtx)
-	ch := make(chan []Entry, entriesCount+1)
+	ch := make(chan []EntryWithID, entriesCount+1)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -176,13 +179,19 @@ func TestWithTTL(t *testing.T) {
 		wg.Done()
 	}()
 
+	startTime := time.Now()
+	ids := make([]EntryID, entriesCount)
 	for i := 0; i < entriesCount; i++ {
-		startTime := time.Now()
-		entryIDs, err := log.Add(baseCtx, entries[i])
+		newID, err := log.Add(baseCtx, entries[i])
 		require.NoError(t, err)
-		assertEntryIDsAreValid(t, startTime, entryIDs, false)
+
+		require.Equal(t, 1, len(newID))
+		ids[i] = newID[0]
+
 		time.Sleep(testInterval)
 	}
+
+	assertEntryIDsAreValid(t, startTime, ids, false)
 
 	// key still exists, even though the TTL has elapsed twice since its creation
 	assert.True(t, redisKeyExists(baseCtx, t, client, key))
@@ -194,8 +203,8 @@ func TestWithTTL(t *testing.T) {
 	cancelTailCtx()
 	wg.Wait()
 
-	// let's just make sure we're received all the entries
-	assert.Equal(t, entries, emptyBufferedChannel(ch))
+	// let's just make sure we're received all the entries, for good measure
+	assert.Equal(t, zipEntriesWithIDs(t, entries, ids), emptyBufferedChannel(ch))
 }
 
 func TestTailAndFollow(t *testing.T) {
@@ -214,9 +223,9 @@ func TestTailAndFollow(t *testing.T) {
 			t.Run(fmt.Sprintf("with %d initial entries, and max length %d", nInitialEntries, maxLength), func(t *testing.T) {
 				entries := allEntries[:nInitialEntries]
 
-				log, _ := seedLog(baseCtx, t, client, entries, maxLength)
+				log, ids := seedLog(baseCtx, t, client, entries, maxLength)
 
-				read, err := log.Tail(baseCtx)
+				actual, err := log.Tail(baseCtx)
 				require.NoError(t, err)
 
 				expectedLen := nInitialEntries
@@ -230,9 +239,11 @@ func TestTailAndFollow(t *testing.T) {
 						}
 					}
 				}
-				expected := entries[nInitialEntries-expectedLen:]
+				expectedEntries := entries[nInitialEntries-expectedLen:]
+				expectedIDs := ids[nInitialEntries-expectedLen:]
+				expected := zipEntriesWithIDs(t, expectedEntries, expectedIDs)
 
-				require.Equal(t, expected, read)
+				require.Equal(t, expected, actual)
 
 				testTail(baseCtx, t, log, expected, 10, log.TailAndFollow)
 			})
@@ -259,20 +270,22 @@ func TestTailNAndFollow(t *testing.T) {
 				t.Run(testName, func(t *testing.T) {
 					entries := allEntries[:nInitialEntries]
 
-					log, _ := seedLog(baseCtx, t, client, entries, maxLength)
+					log, ids := seedLog(baseCtx, t, client, entries, maxLength)
 
-					read, err := log.TailN(baseCtx, n)
+					actual, err := log.TailN(baseCtx, n)
 					require.NoError(t, err)
 
 					expectedLen := min(nInitialEntries, n)
 					if maxLength != 0 {
 						expectedLen = min(expectedLen, maxLength)
 					}
-					expected := entries[nInitialEntries-expectedLen:]
+					expectedEntries := entries[nInitialEntries-expectedLen:]
+					expectedIDs := ids[nInitialEntries-expectedLen:]
+					expected := zipEntriesWithIDs(t, expectedEntries, expectedIDs)
 
-					require.Equal(t, expected, read)
+					require.Equal(t, expected, actual)
 
-					testTail(baseCtx, t, log, expected, 10, func(ctx context.Context, ch chan<- []Entry) error {
+					testTail(baseCtx, t, log, expected, 10, func(ctx context.Context, ch chan<- []EntryWithID) error {
 						return log.TailNAndFollow(ctx, n, ch)
 					})
 				})
@@ -300,16 +313,16 @@ func TestTailFromAndFollow(t *testing.T) {
 				t.Run(testName, func(t *testing.T) {
 					entries := allEntries[:nInitialEntries]
 
-					log, entryIDs := seedLog(baseCtx, t, client, entries, maxLength)
+					log, ids := seedLog(baseCtx, t, client, entries, maxLength)
 
-					entryID := entryIDs[fromIndex]
-					read, err := log.TailFrom(baseCtx, entryID)
+					entryID := ids[fromIndex]
+					actual, err := log.TailFrom(baseCtx, entryID)
 
 					if maxLength != 0 && fromIndex < nInitialEntries-int(maxLength) {
 						assert.Equal(t, UnknownEntryIDError, err)
 
 						// we should also get the same error from the follow version
-						err = log.TailFromAndFollow(baseCtx, entryID, make(chan []Entry))
+						err = log.TailFromAndFollow(baseCtx, entryID, make(chan []EntryWithID))
 						assert.Equal(t, UnknownEntryIDError, err)
 
 						return
@@ -318,17 +331,20 @@ func TestTailFromAndFollow(t *testing.T) {
 					require.NoError(t, err)
 
 					expectedLen := nInitialEntries - fromIndex
-					expected := entries[nInitialEntries-expectedLen:]
+					expectedEntries := entries[nInitialEntries-expectedLen:]
+					expectedIDs := ids[nInitialEntries-expectedLen:]
+					expected := zipEntriesWithIDs(t, expectedEntries, expectedIDs)
 
-					require.Equal(t, expected, read)
+					require.Equal(t, expected, actual)
 
 					// first entry should be the one whose ID we passed
-					entryIndex, err := strconv.Atoi(read[0][indexField].(string))
+					assert.Equal(t, entryID, actual[0].ID)
+					entryIndex, err := strconv.Atoi(actual[0].Entry[indexField].(string))
 					if assert.NoError(t, err) {
 						assert.Equal(t, fromIndex, entryIndex)
 					}
 
-					testTail(baseCtx, t, log, expected, 10, func(ctx context.Context, ch chan<- []Entry) error {
+					testTail(baseCtx, t, log, expected, 10, func(ctx context.Context, ch chan<- []EntryWithID) error {
 						return log.TailFromAndFollow(ctx, entryID, ch)
 					})
 				})
@@ -351,7 +367,7 @@ func TestTailAndFollowTimeout(t *testing.T) {
 	nEntries := 5
 	addInterval := 3 * testInterval
 
-	testTail(baseCtx, t, log, []Entry{}, nEntries, log.TailAndFollow, addInterval)
+	testTail(baseCtx, t, log, []EntryWithID{}, nEntries, log.TailAndFollow, addInterval)
 
 	assert.GreaterOrEqual(t, client.nXReadCalls, 2*(nEntries+1))
 }
@@ -360,6 +376,7 @@ func TestTailAndFollowTimeout(t *testing.T) {
 
 const (
 	indexField = "_index"
+
 	// shouldn't be too short to avoid edge cases/race conditions, especially in CI
 	testInterval = 500 * time.Millisecond
 )
@@ -621,15 +638,15 @@ func testTail(
 	baseCtx context.Context,
 	t *testing.T,
 	log *EventLog,
-	expectedInitialEntries []Entry,
+	expectedInitialEntries []EntryWithID,
 	newEntriesCount int,
-	tailVariant func(context.Context, chan<- []Entry) error,
+	tailVariant func(context.Context, chan<- []EntryWithID) error,
 	addInterval ...time.Duration,
 ) {
 	require.LessOrEqual(t, len(addInterval), 1)
 
 	tailCtx, cancelTailCtx := context.WithCancel(baseCtx)
-	ch := make(chan []Entry)
+	ch := make(chan []EntryWithID)
 
 	var tailExited sync.WaitGroup
 	tailExited.Add(1)
@@ -649,11 +666,15 @@ func testTail(
 	}
 
 	newEntries := randomEntries(newEntriesCount)
+	newIDs := make(chan []EntryID, newEntriesCount+1)
 
 	go func() {
 		for _, entry := range newEntries {
-			_, err := log.Add(baseCtx, entry)
+			newID, err := log.Add(baseCtx, entry)
 			require.NoError(t, err)
+
+			require.Equal(t, 1, len(newID))
+			newIDs <- newID
 
 			if len(addInterval) == 1 {
 				time.Sleep(addInterval[0])
@@ -661,7 +682,7 @@ func testTail(
 		}
 	}()
 
-	received := make([]Entry, 0, newEntriesCount)
+	received := make([]EntryWithID, 0, newEntriesCount)
 	for len(received) < newEntriesCount {
 		select {
 		case entries := <-ch:
@@ -674,7 +695,8 @@ func testTail(
 	cancelTailCtx()
 	tailExited.Wait()
 
-	assert.Equal(t, newEntries, received, "new entries")
+	expectedNewEntries := zipEntriesWithIDs(t, newEntries, emptyBufferedChannel(newIDs))
+	assert.Equal(t, expectedNewEntries, received, "new entries")
 }
 
 func min(items ...any) int {
@@ -723,4 +745,18 @@ func (w *redisClientWrapper) XRead(ctx context.Context, args *redis.XReadArgs) *
 	w.nXReadCalls++
 
 	return w.Client.XRead(ctx, args)
+}
+
+func zipEntriesWithIDs(t *testing.T, entries []Entry, ids []EntryID) []EntryWithID {
+	require.Equal(t, len(entries), len(ids), "different lengths for entries and IDs")
+
+	withIDs := make([]EntryWithID, len(entries))
+	for i, entry := range entries {
+		withIDs[i] = EntryWithID{
+			Entry: entry,
+			ID:    ids[i],
+		}
+	}
+
+	return withIDs
 }
