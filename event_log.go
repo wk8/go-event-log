@@ -246,6 +246,7 @@ func (l *EventLog) tailAndFollow(
 		}).Result()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
+				// just means that we timed out on the "block" duration, we just come right back
 				continue
 			}
 

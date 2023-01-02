@@ -666,7 +666,7 @@ func testTail(
 	}
 
 	newEntries := randomEntries(newEntriesCount)
-	newIDs := make(chan []EntryID, newEntriesCount+1)
+	newIDsCh := make(chan EntryID, newEntriesCount+1)
 
 	go func() {
 		for _, entry := range newEntries {
@@ -674,7 +674,7 @@ func testTail(
 			require.NoError(t, err)
 
 			require.Equal(t, 1, len(newID))
-			newIDs <- newID
+			newIDsCh <- newID[0]
 
 			if len(addInterval) == 1 {
 				time.Sleep(addInterval[0])
@@ -682,21 +682,24 @@ func testTail(
 		}
 	}()
 
-	received := make([]EntryWithID, 0, newEntriesCount)
-	for len(received) < newEntriesCount {
+	actual := make([]EntryWithID, 0, newEntriesCount)
+	newIDs := make([]EntryID, 0, newEntriesCount)
+	for len(actual) < newEntriesCount || len(newIDs) < newEntriesCount {
 		select {
 		case entries := <-ch:
-			received = append(received, entries...)
+			actual = append(actual, entries...)
+		case id := <-newIDsCh:
+			newIDs = append(newIDs, id)
 		case <-baseCtx.Done():
-			t.Fatalf("timed out waiting for entries; current length: %d", len(received))
+			t.Fatalf("timed out waiting for entries & IDs; current lengths: %d and %d", len(actual), len(newIDs))
 		}
 	}
 
 	cancelTailCtx()
 	tailExited.Wait()
 
-	expectedNewEntries := zipEntriesWithIDs(t, newEntries, emptyBufferedChannel(newIDs))
-	assert.Equal(t, expectedNewEntries, received, "new entries")
+	expectedNewEntries := zipEntriesWithIDs(t, newEntries, newIDs)
+	assert.Equal(t, expectedNewEntries, actual, "new entries")
 }
 
 func min(items ...any) int {
