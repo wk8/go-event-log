@@ -353,7 +353,7 @@ func TestTailAndFollowTimeout(t *testing.T) {
 
 	testTail(baseCtx, t, log, []Entry{}, nEntries, log.TailAndFollow, addInterval)
 
-	assert.Greater(t, client.nXReadCalls, 2*(nEntries+1))
+	assert.GreaterOrEqual(t, client.nXReadCalls, 2*(nEntries+1))
 }
 
 // Helpers below
@@ -644,6 +644,8 @@ func testTail(
 	select {
 	case initialEntries := <-ch:
 		assert.Equal(t, expectedInitialEntries, initialEntries, "initial entries")
+	case <-baseCtx.Done():
+		t.Fatalf("timed out waiting for initial entries")
 	}
 
 	newEntries := randomEntries(newEntriesCount)

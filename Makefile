@@ -9,7 +9,7 @@ TEST_COMMAND = go test -race -v -count=1 -cover $(TEST_FLAGS)
 # the TEST_FLAGS env var can be set to eg run only specific tests
 .PHONY: test
 test:
-	$(TEST_COMMAND)
+	time $(TEST_COMMAND)
 
 .PHONY: lint
 lint:
