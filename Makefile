@@ -1,16 +1,16 @@
 .DEFAULT_GOAL := all
 
-# TODO wkpo revisit?
-
 .PHONY: all
 all: test lint
 
 # the TEST_FLAGS env var can be set to eg run only specific tests
+TEST_COMMAND = go test -race -v -count=1 -cover $(TEST_FLAGS)
+
+# the TEST_FLAGS env var can be set to eg run only specific tests
 .PHONY: test
 test:
-	go test -v -count=1 -race -cover "$$TEST_FLAGS"
+	$(TEST_COMMAND)
 
-# TODO wkpo use a container instead?
 .PHONY: lint
 lint:
 	golangci-lint run
