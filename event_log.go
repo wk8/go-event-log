@@ -28,16 +28,9 @@ type Options struct {
 
 type Entry map[string]interface{}
 
-// An EntryID is a unique ID that gets assigned to an entry on creation.
-// It's an opaque ID that can only be re-passed as is to `TailFrom` and its
-// variants.
-type EntryID struct {
-	id string
-}
-
 type EntryWithID struct {
 	Entry Entry
-	ID    EntryID
+	ID    string
 }
 
 // UnknownEntryIDError is the error returned by `TailFrom` and its variants when passed an entry ID
@@ -59,7 +52,7 @@ func New(client redis.UniversalClient, name string, options *Options) *EventLog 
 
 // Add adds one or several entries to the log.
 // It returns the IDs for the given entry(-ies).
-func (l *EventLog) Add(ctx context.Context, entries ...Entry) ([]EntryID, error) {
+func (l *EventLog) Add(ctx context.Context, entries ...Entry) ([]string, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
@@ -81,7 +74,7 @@ func (l *EventLog) Add(ctx context.Context, entries ...Entry) ([]EntryID, error)
 		}
 
 		nEntries := len(entries)
-		ids := make([]EntryID, nEntries)
+		ids := make([]string, nEntries)
 		for i := 0; i < nEntries; i++ {
 			output := cmders[i].String()
 			id := extractIDFromCmderOutput(output)
@@ -89,7 +82,7 @@ func (l *EventLog) Add(ctx context.Context, entries ...Entry) ([]EntryID, error)
 				return nil, fmt.Errorf("unable to extract entry ID from %q", output)
 			}
 
-			ids[i] = EntryID{id}
+			ids[i] = id
 		}
 
 		return ids, err
@@ -101,7 +94,7 @@ func (l *EventLog) Add(ctx context.Context, entries ...Entry) ([]EntryID, error)
 		return nil, err
 	}
 
-	return []EntryID{{id}}, nil
+	return []string{id}, nil
 }
 
 var idFromOutputRegex = regexp.MustCompile(`:\s*([\d]+-[\d]+)\s*$`)
@@ -141,16 +134,16 @@ func (l *EventLog) TailN(ctx context.Context, n uint) ([]EntryWithID, error) {
 
 // TailFrom retrieves the messages including and since the given entry ID. It returns UnknownEntryIDError if the entry
 // ID doesn't exist (or no longer exists).
-func (l *EventLog) TailFrom(ctx context.Context, from EntryID) ([]EntryWithID, error) {
+func (l *EventLog) TailFrom(ctx context.Context, from string) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, nil, &from)
 }
 
-func (l *EventLog) tailEntries(ctx context.Context, n *uint, from *EntryID) ([]EntryWithID, error) {
+func (l *EventLog) tailEntries(ctx context.Context, n *uint, from *string) ([]EntryWithID, error) {
 	messages, err := l.tailMessages(ctx, n, from)
 	return messagesToEntries(messages), err
 }
 
-func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *EntryID) (messages []redis.XMessage, err error) {
+func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *string) (messages []redis.XMessage, err error) {
 	var max uint
 	switch {
 	case n == nil || *n > l.options.MaxLength && l.options.MaxLength != 0:
@@ -163,7 +156,7 @@ func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *EntryID) (me
 
 	start := "-"
 	if from != nil {
-		start = from.id
+		start = *from
 	}
 
 	if max > 0 {
@@ -175,7 +168,7 @@ func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *EntryID) (me
 		messages, err = l.client.XRange(ctx, l.name, start, "+").Result()
 	}
 
-	if err == nil && from != nil && (len(messages) == 0 || messages[0].ID != from.id) {
+	if err == nil && from != nil && (len(messages) == 0 || messages[0].ID != *from) {
 		err = UnknownEntryIDError
 	}
 
@@ -204,14 +197,14 @@ func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []Entry
 // TailFromAndFollow is the same as TailAndFollow, except it will limit itself to the given entry ID and the following
 // entries.
 // Just like TailFrom, it returns UnknownEntryIDError if the entry ID doesn't exist (or no longer exists).
-func (l *EventLog) TailFromAndFollow(ctx context.Context, from EntryID, ch chan<- []EntryWithID) error {
+func (l *EventLog) TailFromAndFollow(ctx context.Context, from string, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, nil, &from, ch)
 }
 
 var xReadTimeout = time.Hour // nolint: gochecknoglobals
 
 func (l *EventLog) tailAndFollow(
-	ctx context.Context, n *uint, from *EntryID, entryChan chan<- []EntryWithID,
+	ctx context.Context, n *uint, from *string, entryChan chan<- []EntryWithID,
 ) (err error) {
 	var messages []redis.XMessage
 
@@ -266,7 +259,7 @@ func messagesToEntries(messages []redis.XMessage) []EntryWithID {
 	for i, message := range messages {
 		entries[i] = EntryWithID{
 			Entry: message.Values,
-			ID:    EntryID{message.ID},
+			ID:    message.ID,
 		}
 	}
 	return entries

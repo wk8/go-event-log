@@ -44,7 +44,7 @@ func TestThreadAndProcessSafe(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(producersCount * (1 + consumersPerProducer))
 
-	entryIDsCh := make(chan []EntryID, len(entries)+1)
+	entryIDsCh := make(chan []string, len(entries)+1)
 
 	blockingCountBefore := countBlockingConnections(baseCtx, t, client)
 	startTime := time.Now()
@@ -113,7 +113,7 @@ func TestThreadAndProcessSafe(t *testing.T) {
 	assert.Equal(t, blockingCountAfter, blockingCountBefore)
 
 	// last but not least, let's check the entry IDs
-	entryIDs := emptyBufferedChannel(entryIDsCh, func(ids []EntryID) {
+	entryIDs := emptyBufferedChannel(entryIDsCh, func(ids []string) {
 		// we pushed one by one
 		require.Equal(t, 1, len(ids))
 	})
@@ -180,7 +180,7 @@ func TestWithTTL(t *testing.T) {
 	}()
 
 	startTime := time.Now()
-	ids := make([]EntryID, entriesCount)
+	ids := make([]string, entriesCount)
 	for i := 0; i < entriesCount; i++ {
 		newID, err := log.Add(baseCtx, entries[i])
 		require.NoError(t, err)
@@ -503,7 +503,7 @@ func emptyBufferedChannel[T any](ch chan []T, forEachAssertions ...func([]T)) (r
 // checks that the entry IDs make sense: they should be of the form "timestamp-seqNumber"
 // where timestamp should be between startTime and now, and seqNumbers for the same timestamp
 // should be sequential from 0, and appear exactly once each.
-func assertEntryIDsAreValid(t *testing.T, startTime time.Time, ids []EntryID, expectNonZeroSeqNumbers bool) bool {
+func assertEntryIDsAreValid(t *testing.T, startTime time.Time, ids []string, expectNonZeroSeqNumbers bool) bool {
 	if len(ids) == 0 {
 		return true
 	}
@@ -526,7 +526,7 @@ func assertEntryIDsAreValid(t *testing.T, startTime time.Time, ids []EntryID, ex
 }
 
 // Returns a list of [timestamp, maxSeqNumber] tuples, ordered by timestamps.
-func parseAndProcessEntryIDs(ids []EntryID) ([][2]int64, error) {
+func parseAndProcessEntryIDs(ids []string) ([][2]int64, error) {
 	// maps each timestamp to the set of all seqNumbers we've seen for it so far
 	perTimestamp := make(map[int64]map[int]bool)
 
@@ -565,14 +565,14 @@ func parseAndProcessEntryIDs(ids []EntryID) ([][2]int64, error) {
 
 var entryIDRegex = regexp.MustCompile(`^([\d]+)-([\d]+)$`)
 
-func parseEntryID(id EntryID) (timestamp int64, seqNumber int, err error) {
-	if match := entryIDRegex.FindStringSubmatch(id.id); len(match) == 3 {
+func parseEntryID(id string) (timestamp int64, seqNumber int, err error) {
+	if match := entryIDRegex.FindStringSubmatch(id); len(match) == 3 {
 		timestamp, err = strconv.ParseInt(match[1], 10, 0)
 		if err == nil {
 			seqNumber, err = strconv.Atoi(match[2])
 		}
 	} else {
-		err = fmt.Errorf("unable to parse entry ID %q", id.id)
+		err = fmt.Errorf("unable to parse entry ID %q", id)
 	}
 
 	return
@@ -615,7 +615,7 @@ func seedLog(
 	maxLength ...uint,
 ) (
 	*EventLog,
-	[]EntryID,
+	[]string,
 ) {
 	require.LessOrEqual(t, len(maxLength), 1)
 	var o *Options
@@ -666,7 +666,7 @@ func testTail(
 	}
 
 	newEntries := randomEntries(newEntriesCount)
-	newIDsCh := make(chan EntryID, newEntriesCount+1)
+	newIDsCh := make(chan string, newEntriesCount+1)
 
 	go func() {
 		for _, entry := range newEntries {
@@ -683,7 +683,7 @@ func testTail(
 	}()
 
 	actual := make([]EntryWithID, 0, newEntriesCount)
-	newIDs := make([]EntryID, 0, newEntriesCount)
+	newIDs := make([]string, 0, newEntriesCount)
 	for len(actual) < newEntriesCount || len(newIDs) < newEntriesCount {
 		select {
 		case entries := <-ch:
@@ -750,7 +750,7 @@ func (w *redisClientWrapper) XRead(ctx context.Context, args *redis.XReadArgs) *
 	return w.Client.XRead(ctx, args)
 }
 
-func zipEntriesWithIDs(t *testing.T, entries []Entry, ids []EntryID) []EntryWithID {
+func zipEntriesWithIDs(t *testing.T, entries []Entry, ids []string) []EntryWithID {
 	require.Equal(t, len(entries), len(ids), "different lengths for entries and IDs")
 
 	withIDs := make([]EntryWithID, len(entries))
