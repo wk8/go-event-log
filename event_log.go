@@ -246,7 +246,9 @@ func (l *EventLog) tailAndFollow(
 			return err
 		}
 		messages = result[0].Messages
-		entryChan <- messagesToEntries(messages)
+		if len(messages) != 0 {
+			entryChan <- messagesToEntries(messages)
+		}
 
 		if err := ctx.Err(); err != nil {
 			return err
