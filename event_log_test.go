@@ -372,6 +372,32 @@ func TestTailAndFollowTimeout(t *testing.T) {
 	assert.GreaterOrEqual(t, client.nXReadCalls, 2*(nEntries+1))
 }
 
+func TestTailDoesNotLockWhenTheChannelIsNotBeingReadFrom(t *testing.T) {
+	baseCtx := withTestDeadline(t, 5*time.Second)
+
+	client := redisClient(baseCtx, t)
+
+	key := withTestRedisKey(baseCtx, t, client)
+	log := New(client, key, nil)
+
+	tailCtx, cancelTailCtx := context.WithCancel(baseCtx)
+	ch := make(chan []EntryWithID)
+
+	var tailExited sync.WaitGroup
+	tailExited.Add(1)
+
+	go func() {
+		defer tailExited.Done()
+
+		err := log.TailAndFollow(tailCtx, ch)
+		assert.ErrorIs(t, err, context.Canceled)
+	}()
+
+	time.Sleep(testInterval)
+	cancelTailCtx()
+	tailExited.Wait()
+}
+
 // Helpers below
 
 const (

@@ -176,7 +176,7 @@ func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *string) (mes
 }
 
 // TailAndFollow is a blocking call. It retrieves the last MaxLength messages from the log (or all of them if the
-// MaxLength option was not set), pushes them to the channel, and then proceeds to wait for new messages.
+// MaxLength option was not set), pushes them to the channel, and then proceeds to wait for new messages,
 // and pushes them down the channel as they come in.
 // It guarantees to push all messages exactly once.
 // It will only return when it encounters an error talking to Redis, or when the context expires or gets canceled
@@ -190,6 +190,7 @@ func (l *EventLog) TailAndFollow(ctx context.Context, ch chan<- []EntryWithID) e
 // before starting to listen for new ones.
 // n can be 0 here too, as for TailN, and here it can make sense: that can be used
 // to subscribe to future entries regardless of past ones.
+// Same as TailAndFollow, never returns nil.
 func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, &n, nil, ch)
 }
@@ -197,6 +198,7 @@ func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []Entry
 // TailFromAndFollow is the same as TailAndFollow, except it will limit itself to the given entry ID and the following
 // entries.
 // Just like TailFrom, it returns UnknownEntryIDError if the entry ID doesn't exist (or no longer exists).
+// Same as TailAndFollow, never returns nil.
 func (l *EventLog) TailFromAndFollow(ctx context.Context, from string, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, nil, &from, ch)
 }
@@ -221,10 +223,17 @@ func (l *EventLog) tailAndFollow(
 	if err != nil {
 		return err
 	}
+
+	var entries []EntryWithID
 	if nIsZero || len(messages) == 0 {
-		entryChan <- []EntryWithID{}
+		entries = []EntryWithID{}
 	} else {
-		entryChan <- messagesToEntries(messages)
+		entries = messagesToEntries(messages)
+	}
+	select {
+	case entryChan <- entries:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	lastMessageID := "0"
@@ -247,7 +256,11 @@ func (l *EventLog) tailAndFollow(
 		}
 		messages = result[0].Messages
 		if len(messages) != 0 {
-			entryChan <- messagesToEntries(messages)
+			select {
+			case entryChan <- messagesToEntries(messages):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 
 		if err := ctx.Err(); err != nil {
