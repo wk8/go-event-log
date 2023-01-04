@@ -359,7 +359,7 @@ func TestTailAndFollowTimeout(t *testing.T) {
 
 	baseCtx := withTestDeadline(t, 30*time.Second)
 
-	client := &redisClientWrapper{Client: redisClient(baseCtx, t)}
+	client := &redisClientWrapper{UniversalClient: redisClient(baseCtx, t)}
 
 	key := withTestRedisKey(baseCtx, t, client)
 	log := New(client, key, nil)
@@ -436,7 +436,7 @@ func redisKeyExists(ctx context.Context, t *testing.T, client redis.UniversalCli
 }
 
 // these tests assume that there is a redis server listening on port 6379 locally
-func redisClient(ctx context.Context, t *testing.T) *redis.Client {
+func redisClient(ctx context.Context, t *testing.T) redis.UniversalClient {
 	client := redis.NewClient(&redis.Options{})
 	require.NoError(t, client.Ping(ctx).Err())
 
@@ -467,7 +467,7 @@ func randomEntries(n int) []Entry {
 
 // counts Redis connections that are in the "blocking" state, i.e. that are waiting for
 // an event
-func countBlockingConnections(ctx context.Context, t *testing.T, c *redis.Client) int {
+func countBlockingConnections(ctx context.Context, t *testing.T, c redis.UniversalClient) int {
 	clientList, err := c.ClientList(ctx).Result()
 	require.NoError(t, err)
 
@@ -636,7 +636,7 @@ func existsNonZeroMaxSeqNumber(processedEntryIDs [][2]int64) bool {
 func seedLog(
 	ctx context.Context,
 	t *testing.T,
-	client *redis.Client,
+	client redis.UniversalClient,
 	entries []Entry,
 	maxLength ...uint,
 ) (
@@ -764,7 +764,7 @@ func withXReadTimeout(t *testing.T, duration time.Duration) {
 
 // allows counting the XREAD calls, and inspecting how many messages were retrieved
 type redisClientWrapper struct {
-	*redis.Client
+	redis.UniversalClient
 
 	nXReadCalls        int
 	xReadMessageCounts []int
@@ -773,7 +773,7 @@ type redisClientWrapper struct {
 func (w *redisClientWrapper) XRead(ctx context.Context, args *redis.XReadArgs) *redis.XStreamSliceCmd {
 	w.nXReadCalls++
 
-	return w.Client.XRead(ctx, args)
+	return w.UniversalClient.XRead(ctx, args)
 }
 
 func zipEntriesWithIDs(t *testing.T, entries []Entry, ids []string) []EntryWithID {
