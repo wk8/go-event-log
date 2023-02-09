@@ -53,20 +53,33 @@ func TestThreadAndProcessSafe(t *testing.T) {
 		go func(producerID int) {
 			defer wg.Done()
 
+			// this way we test both sharing the same log, or using different log objects
+			// sharing the same underlying redis stream
+			localLog := log
+			if producerID%2 == 0 {
+				localLog = New(redisClient(baseCtx, t), key, nil)
+			}
+
 			for j := 0; j < entriesPerProducer; j++ {
-				ids, err := log.Add(baseCtx, entries[producerID+j*producersCount])
+				ids, err := localLog.Add(baseCtx, entries[producerID+j*producersCount])
 				require.NoError(t, err)
 				entryIDsCh <- ids
 			}
 		}(i)
 
 		for k := 0; k < consumersPerProducer; k++ {
-			go func() {
+			go func(consumerID int) {
 				defer wg.Done()
 
-				err := log.TailAndFollow(tailCtx, ch)
+				// same idea as above for producers
+				localLog := log
+				if consumerID%2 == 0 {
+					localLog = New(redisClient(baseCtx, t), key, nil)
+				}
+
+				err := localLog.TailAndFollow(tailCtx, ch)
 				assert.ErrorIs(t, err, context.Canceled)
-			}()
+			}(i*consumersPerProducer + k)
 		}
 	}
 
