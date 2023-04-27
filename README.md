@@ -18,7 +18,7 @@ package main
 import (
 	"context"
 
-	"github.com/go-redis/redis/v8"
+	"github.com/redis/go-redis/v9"
 	eventlog "github.com/wk8/go-event-log"
 )
 
