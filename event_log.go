@@ -33,10 +33,6 @@ type EntryWithID struct {
 	ID    string
 }
 
-// UnknownEntryIDError is the error returned by `TailFrom` and its variants when passed an entry ID
-// that doesn't exist (or no longer exists, e.g. if the log has a max length).
-var UnknownEntryIDError = errors.New("unknown entry ID") //nolint:gochecknoglobals
-
 // New creates a new EventLog.
 func New(client redis.UniversalClient, name string, options *Options) *EventLog {
 	if options == nil {
@@ -132,8 +128,9 @@ func (l *EventLog) TailN(ctx context.Context, n uint) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, &n, nil)
 }
 
-// TailFrom retrieves the messages including and since the given entry ID. It returns UnknownEntryIDError if the entry
-// ID doesn't exist (or no longer exists).
+// TailFrom retrieves the messages including and since the given entry ID.
+// If it's important for the caller to ensure that they haven't missed any messages,
+// they should check that the ID of the 1st returned entry is the ID they passed in.
 func (l *EventLog) TailFrom(ctx context.Context, from string) ([]EntryWithID, error) {
 	return l.tailEntries(ctx, nil, &from)
 }
@@ -168,10 +165,6 @@ func (l *EventLog) tailMessages(ctx context.Context, n *uint, from *string) (mes
 		messages, err = l.client.XRange(ctx, l.name, start, "+").Result()
 	}
 
-	if err == nil && from != nil && (len(messages) == 0 || messages[0].ID != *from) {
-		err = UnknownEntryIDError
-	}
-
 	return
 }
 
@@ -197,7 +190,8 @@ func (l *EventLog) TailNAndFollow(ctx context.Context, n uint, ch chan<- []Entry
 
 // TailFromAndFollow is the same as TailAndFollow, except it will limit itself to the given entry ID and the following
 // entries.
-// Just like TailFrom, it returns UnknownEntryIDError if the entry ID doesn't exist (or no longer exists).
+// Just like TailFrom, callers should check that the first entry's ID is the one they expect if they
+// want to ensure that they didn't miss anything.
 // Same as TailAndFollow, never returns nil.
 func (l *EventLog) TailFromAndFollow(ctx context.Context, from string, ch chan<- []EntryWithID) error {
 	return l.tailAndFollow(ctx, nil, &from, ch)

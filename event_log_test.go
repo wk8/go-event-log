@@ -330,31 +330,26 @@ func TestTailFromAndFollow(t *testing.T) {
 
 					entryID := ids[fromIndex]
 					actual, err := log.TailFrom(baseCtx, entryID)
-
-					if maxLength != 0 && fromIndex < nInitialEntries-int(maxLength) {
-						assert.Equal(t, UnknownEntryIDError, err)
-
-						// we should also get the same error from the follow version
-						err = log.TailFromAndFollow(baseCtx, entryID, make(chan []EntryWithID))
-						assert.Equal(t, UnknownEntryIDError, err)
-
-						return
-					}
-
 					require.NoError(t, err)
 
 					expectedLen := nInitialEntries - fromIndex
+					if maxLength != 0 {
+						expectedLen = min(expectedLen, maxLength)
+					}
 					expectedEntries := entries[nInitialEntries-expectedLen:]
 					expectedIDs := ids[nInitialEntries-expectedLen:]
 					expected := zipEntriesWithIDs(t, expectedEntries, expectedIDs)
 
 					require.Equal(t, expected, actual)
 
-					// first entry should be the one whose ID we passed
-					assert.Equal(t, entryID, actual[0].ID)
-					entryIndex, err := strconv.Atoi(actual[0].Entry[indexField].(string))
-					if assert.NoError(t, err) {
-						assert.Equal(t, fromIndex, entryIndex)
+					if maxLength == 0 || fromIndex >= nInitialEntries-int(maxLength) {
+						// first entry should be the one whose ID we passed
+						assert.Equal(t, entryID, actual[0].ID)
+
+						entryIndex, err := strconv.Atoi(actual[0].Entry[indexField].(string))
+						if assert.NoError(t, err) {
+							assert.Equal(t, fromIndex, entryIndex)
+						}
 					}
 
 					testTail(baseCtx, t, log, expected, 10, func(ctx context.Context, ch chan<- []EntryWithID) error {
